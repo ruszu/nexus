@@ -1,0 +1,114 @@
+---
+- name: Install java
+  yum:
+    name: "{{ java.version }}"
+    state: present
+
+- name: Install java-devel
+  yum:
+    name: "{{ java.version_devel }}"
+    state: present
+
+- name: Download nexus_package
+  get_url:
+    url: "http://download.sonatype.com/nexus/3/{{ nexus_package }}"
+    dest: "{{ nexus_download_dir }}/{{ nexus_package }}"
+    force: no
+
+- name:  Nexus o/s group
+  group:
+    name: "{{ nexus_os_group }}"
+    state: present
+
+- name:  Nexus o/s user
+  user:
+    name: "{{ nexus_os_user }}"
+    group: "{{ nexus_os_group }}"
+    shell: "/bin/bash"
+    state: present
+
+- name: Unpack Nexus download
+  unarchive:
+    src: "{{ nexus_download_dir }}/{{ nexus_package }}"
+    dest: "{{ nexus_installation_dir }}"
+    creates: "{{ nexus_installation_dir }}/nexus-{{ nexus_version }}"
+    force: no
+    copy: false
+
+- name: Update symlink nexus-latest
+  file:
+    path: "{{ nexus_installation_dir }}/nexus-latest"
+    src: "{{ nexus_installation_dir }}/nexus-{{ nexus_version }}"
+    owner: "{{ nexus_os_user }}"
+    group: "{{ nexus_os_group }}"
+    state: link
+  register: nexus_latest_version
+
+- name: Get path to default settings
+  set_fact:
+    nexus_default_settings_file: "{{ nexus_installation_dir }}/nexus-latest/etc/nexus-default.properties"
+
+- name: Get application settings directories
+  set_fact:
+    nexus_app_dir_settings_dirs:
+      - "{{ nexus_installation_dir }}/nexus-latest/etc"
+      - "{{ nexus_installation_dir }}/nexus-latest/etc/karaf"
+      - "{{ nexus_installation_dir }}/nexus-latest/etc/jetty"
+      - "{{ nexus_installation_dir }}/nexus-latest/etc/fabric"
+      - "{{ nexus_installation_dir }}/nexus-latest/etc/logback"
+      - "{{ nexus_installation_dir }}/nexus-latest/etc/scripts"
+- name: Allow nexus to create first-time install configuration files in  {{ nexus_installation_dir }}/nexus-latest/etc
+  file:
+    path: "{{ item }}"
+    state: "directory"
+    owner: "{{ nexus_os_user }}"
+    group: "{{ nexus_os_group }}"
+    mode: "0755"
+    recurse: false
+  with_items: "{{ nexus_app_dir_settings_dirs }}"
+
+- name: Create Nexus data directory
+  file:
+    path: "{{ nexus_data_dir }}"
+    state: "directory"
+    owner: "{{ nexus_os_user }}"
+    group: "{{ nexus_os_group }}"
+
+- name: Setup Nexus data directory
+  lineinfile:
+    dest: "{{ nexus_installation_dir }}/nexus-latest/bin/nexus.vmoptions"
+    regexp: "^-Dkaraf.data=.*"
+    line: "-Dkaraf.data={{ nexus_data_dir }}"
+
+- name: Setup JVM logfile directory
+  lineinfile:
+    dest: "{{ nexus_installation_dir }}/nexus-latest/bin/nexus.vmoptions"
+    regexp: "^-XX:LogFile=.*"
+    line: "-XX:LogFile={{ nexus_data_dir }}/log/jvm.log"
+
+- name: Set nexus user
+  lineinfile:
+    dest: "{{ nexus_installation_dir }}/nexus-latest/bin/nexus.rc"
+    regexp: ".*run_as_user=.*"
+    line: "run_as_user=\"{{ nexus_os_user }}\""
+
+- name: Set nexus port
+  lineinfile:
+    dest: "{{ nexus_default_settings_file }}"
+    regexp: "^application-port=.*"
+    line: "application-port={{ nexus_default_port }}"
+
+- name: Create systemd service configuration
+  template:
+    src: "nexus.service"
+    dest: "/etc/systemd/system"
+
+- name: Reload systemd service configuration
+  shell: 'systemctl daemon-reload'
+
+- name: Enable systemd service
+  shell: 'systemctl enable nexus.service'
+
+- name: Start systemd service
+  shell: 'systemctl start nexus.service'
+
